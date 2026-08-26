@@ -11,20 +11,21 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Image,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 
 const API_URL = 'https://script.google.com/macros/s/AKfycbyLpLoBjFDvOCtpqkDG6PfPIccnYQZ7ovSQjtdwfdq19dVfrjBHV9ZzIkO3I7adAFnvcg/exec';
@@ -126,8 +127,13 @@ function PressableScale({
     Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 40 }).start();
   };
 
+  const handlePress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onPress();
+  };
+
   return (
-    <Pressable onPressIn={pressIn} onPressOut={pressOut} onPress={onPress} disabled={disabled}>
+    <Pressable onPressIn={pressIn} onPressOut={pressOut} onPress={handlePress} disabled={disabled}>
       <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>
     </Pressable>
   );
@@ -148,6 +154,13 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [records, setRecords] = useState<Record<string, TodayRecord>>({});
   const [now, setNow] = useState(new Date());
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
+
+  // Fade+slide animation for the whole screen on first load
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(16)).current;
+  // Separate fade just for the status card, so it pulses gently whenever the message changes
+  const statusFade = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -160,12 +173,30 @@ export default function HomeScreen() {
       setRecords(res || {});
     } catch (err) {
       console.log('Could not load today records', err);
+    } finally {
+      setInitialLoadDone(true);
     }
   }, []);
 
   useEffect(() => {
     refreshTodayLog();
   }, [refreshTodayLog]);
+
+  // Once fonts + first data fetch are both ready, fade the screen in
+  useEffect(() => {
+    if (fontsLoaded && initialLoadDone) {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 420, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 0, duration: 420, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [fontsLoaded, initialLoadDone]);
+
+  // Pulse the status card whenever the status text changes
+  useEffect(() => {
+    statusFade.setValue(0.3);
+    Animated.timing(statusFade, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+  }, [statusLine]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -177,7 +208,6 @@ export default function HomeScreen() {
   const alreadySignedIn = !!(rec && rec.signIn);
   const alreadySignedOut = !!(rec && rec.signOut);
 
-  // Determine the status card's color + icon based on current state
   let cardColor = COLORS.textMuted;
   let cardIcon: any = 'time-outline';
   if (rec && rec.signIn && rec.signOut) {
@@ -186,7 +216,13 @@ export default function HomeScreen() {
   } else if (rec && rec.signIn) {
     cardColor = rec.signIn.status === 'late' ? COLORS.amber : COLORS.green;
     cardIcon = rec.signIn.status === 'late' ? 'alert-circle' : 'checkmark-circle';
-  } else if (statusLine.toLowerCase().includes('denied') || statusLine.toLowerCase().includes('error') || statusLine.toLowerCase().includes('busy') || statusLine.toLowerCase().includes('off') || statusLine.toLowerCase().includes('m from')) {
+  } else if (
+    statusLine.toLowerCase().includes('denied') ||
+    statusLine.toLowerCase().includes('error') ||
+    statusLine.toLowerCase().includes('busy') ||
+    statusLine.toLowerCase().includes('off') ||
+    statusLine.toLowerCase().includes('m from')
+  ) {
     cardColor = COLORS.red;
     cardIcon = 'close-circle';
   }
@@ -198,6 +234,7 @@ export default function HomeScreen() {
     try {
       const netState = await NetInfo.fetch();
       if (!netState.isConnected || netState.isInternetReachable === false) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         Alert.alert('No Internet Connection', 'Please check your WiFi or mobile data and try again.');
         setStatusLine('No internet connection. Please try again.');
         setLoading(false);
@@ -207,6 +244,7 @@ export default function HomeScreen() {
       setStatusLine('Checking location services...');
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (!servicesEnabled) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         Alert.alert('Location Services Off', 'Please turn on Location/GPS in your phone settings, then try again.');
         setStatusLine('Location services are turned off on this phone.');
         setLoading(false);
@@ -216,6 +254,7 @@ export default function HomeScreen() {
       setStatusLine('Checking your location permission...');
       const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
       if (permissionStatus !== 'granted') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         Alert.alert('Permission Denied', 'Location access is required to sign in or out.');
         setStatusLine('Location permission denied.');
         setLoading(false);
@@ -231,6 +270,7 @@ export default function HomeScreen() {
           'Could not get your location in time. Try moving to an open area and try again.'
         );
       } catch (timeoutErr: any) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         Alert.alert('Location Timeout', timeoutErr.message);
         setStatusLine(timeoutErr.message);
         setLoading(false);
@@ -258,6 +298,7 @@ export default function HomeScreen() {
           'The server took too long to respond. Please check your connection and try again.'
         );
       } catch (timeoutErr: any) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         Alert.alert('Connection Issue', timeoutErr.message);
         setStatusLine(timeoutErr.message);
         setLoading(false);
@@ -265,14 +306,17 @@ export default function HomeScreen() {
       }
 
       if (!res.ok) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         Alert.alert('Not Signed ' + (type === 'in' ? 'In' : 'Out'), res.error);
         setStatusLine(res.error);
       } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Alert.alert('Success', `Signed ${type} at ${res.time} (${res.dist}m from office).`);
         setStatusLine(`Signed ${type} at ${res.time} (${res.dist}m from office).`);
         refreshTodayLog();
       }
     } catch (err: any) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Error', err.message || 'Something went wrong.');
       setStatusLine(err.message || 'Something went wrong. Check your connection.');
     } finally {
@@ -280,26 +324,39 @@ export default function HomeScreen() {
     }
   };
 
-  if (!fontsLoaded) {
-    return <View style={{ flex: 1, backgroundColor: COLORS.navy }} />;
+  // Branded loading screen while fonts + first data fetch are in progress
+  if (!fontsLoaded || !initialLoadDone) {
+    return (
+      <View style={styles.loadingScreen}>
+        <Image
+          source={require('@/assets/images/icon.png')}
+          style={styles.loadingLogo}
+          resizeMode="contain"
+        />
+        <ActivityIndicator color="#FFFFFF" style={{ marginTop: 24 }} />
+      </View>
+    );
   }
 
   return (
     <View style={styles.root}>
-      <LinearGradient colors={[COLORS.navy, COLORS.blue]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.header}>
-        <Image
-          source={require('@/assets/images/android-icon-foreground.png')}
-          style={styles.watermark}
-          resizeMode="contain"
-        />
-        <Text style={styles.greeting}>{getGreeting(now.getHours())}</Text>
-        <Text style={styles.clock}>{now.toLocaleTimeString('en-GB')}</Text>
-        <Text style={styles.dateText}>
-          {now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
-        </Text>
-      </LinearGradient>
+      <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+        <LinearGradient colors={[COLORS.navy, COLORS.blue]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.header}>
+          <Image
+            source={require('@/assets/images/android-icon-foreground.png')}
+            style={styles.watermark}
+            resizeMode="contain"
+          />
+          <Text style={styles.greeting}>{getGreeting(now.getHours())}</Text>
+          <Text style={styles.clock}>{now.toLocaleTimeString('en-GB')}</Text>
+          <Text style={styles.dateText}>
+            {now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
+          </Text>
+        </LinearGradient>
+      </Animated.View>
 
-      <ScrollView
+      <Animated.ScrollView
+        style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}
         contentContainerStyle={styles.body}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.navy} />}
       >
@@ -311,7 +368,10 @@ export default function HomeScreen() {
               <TouchableOpacity
                 key={w.id}
                 style={[styles.segment, active && styles.segmentActive]}
-                onPress={() => setSelectedWorker(w)}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setSelectedWorker(w);
+                }}
                 activeOpacity={0.85}
               >
                 <Text style={[styles.segmentText, active && styles.segmentTextActive]} numberOfLines={1}>
@@ -322,10 +382,10 @@ export default function HomeScreen() {
           })}
         </View>
 
-        <View style={[styles.statusCard, { borderLeftColor: cardColor }]}>
+        <Animated.View style={[styles.statusCard, { borderLeftColor: cardColor, opacity: statusFade }]}>
           <Ionicons name={cardIcon} size={26} color={cardColor} style={{ marginRight: 12 }} />
           <Text style={styles.statusText}>{statusLine}</Text>
-        </View>
+        </Animated.View>
 
         <PressableScale
           onPress={() => handlePunch('in')}
@@ -372,13 +432,14 @@ export default function HomeScreen() {
                 pillBg = COLORS.greenBg;
               }
             }
+            const firstName = w.name.split(' ')[0];
             return (
               <View key={w.id} style={styles.logRow}>
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>{getInitials(w.name)}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.logName}>{w.name}</Text>
+                  <Text style={styles.logName} numberOfLines={1}>{firstName}</Text>
                   <Text style={styles.logTime}>In {inTxt}   ·   Out {outTxt}</Text>
                 </View>
                 <View style={[styles.pill, { backgroundColor: pillBg }]}>
@@ -388,7 +449,7 @@ export default function HomeScreen() {
             );
           })}
         </View>
-      </ScrollView>
+      </Animated.ScrollView>
     </View>
   );
 }
@@ -397,6 +458,17 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: COLORS.bg,
+  },
+  loadingScreen: {
+    flex: 1,
+    backgroundColor: COLORS.navy,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingLogo: {
+    width: 100,
+    height: 100,
+    borderRadius: 24,
   },
   header: {
     paddingTop: 56,
