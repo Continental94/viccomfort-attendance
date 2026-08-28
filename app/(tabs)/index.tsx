@@ -28,7 +28,7 @@ import {
   View
 } from 'react-native';
 
-const API_URL = 'https://script.google.com/macros/s/AKfycbyLpLoBjFDvOCtpqkDG6PfPIccnYQZ7ovSQjtdwfdq19dVfrjBHV9ZzIkO3I7adAFnvcg/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbzWbMjVCTtTuejwftuQ2LHfmyaQon1bHz7G2OMCDGD5XtNJf0363aivZsjGtmPqoTXv3w/exec';
 
 const WORKERS = [
   { id: 'onabanjo', name: 'Onabanjo Oladipupo' },
